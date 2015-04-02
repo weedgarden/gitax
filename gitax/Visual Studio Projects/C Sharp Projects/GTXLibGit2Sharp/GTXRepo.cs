@@ -20,7 +20,8 @@ namespace GTXLibGit2Sharp
         /// <param name="repoPath">the repository main path</param>
         public static void Init(string repoPath)
         {
-            Repository.Init(repoPath);
+            if (!Repository.IsValid(repoPath))
+                Repository.Init(repoPath, false);
         }
 
         /// <summary>
@@ -38,7 +39,7 @@ namespace GTXLibGit2Sharp
         /// <returns>LibGit2Sharp version</returns>
         public static string GetLibGit2SharpVersion()
         {
-            return Repository.Version;
+            return GlobalSettings.Version.InformationalVersion;
         }
 
         /// <summary>
@@ -51,7 +52,43 @@ namespace GTXLibGit2Sharp
         }
 
         /// <summary>
-        /// Brings all commits related to the file
+        /// Builds the file history from a repository path, file path and the reference to object SysVersionControlTmpItem
+        /// </summary>
+        /// <param name="repoPath">Repository main path</param>
+        /// <param name="filePath">File to be pulling the commits</param>
+        /// <param name="tmpItem">Ref to the SysVersionControlTmpItem object to be inserting to</param>
+        /// <returns>A SysVersionControlTmpItem filled with the commits</returns>
+        public static SysVersionControlTmpItem BuildFileHistory(string repoPath, string filePath, ref SysVersionControlTmpItem tmpItem)
+        {
+            FileInfo fileInfo = new FileInfo(filePath);
+
+            using (var repo = new Repository(repoPath))
+            {
+                var indexPath = fileInfo.FullName.Replace(repo.Info.WorkingDirectory, string.Empty);
+                var commits = repo.Head.Commits.Where(c => c.Parents.Count() == 1 && c.Tree[indexPath] != null && (c.Parents.FirstOrDefault().Tree[indexPath] == null || c.Tree[indexPath].Target.Id != c.Parents.FirstOrDefault().Tree[indexPath].Target.Id));
+
+                foreach (Commit commit in commits)
+                {
+                    tmpItem.User = commit.Author.ToString();
+                    tmpItem.GTXShaShort = commit.Sha.Substring(0, 7);
+                    tmpItem.GTXSha = commit.Sha;
+                    tmpItem.Comment = commit.Message;
+                    tmpItem.ShortComment = commit.MessageShort;
+                    tmpItem.VCSDate = commit.Committer.When.Date;
+                    tmpItem.VCSTime = (int)commit.Committer.When.DateTime.TimeOfDay.TotalSeconds;
+                    tmpItem.Filename_ = FileGetVersion(repoPath, fileInfo.FullName, commit.Sha, Path.Combine(Path.GetTempPath(), string.Format("{0}_{1}{2}",  fileInfo.Name, commit.Sha.Substring(0,7), fileInfo.Extension)));
+                    tmpItem.InternalFilename = fileInfo.FullName;
+                    tmpItem.ItemPath = indexPath;
+                    tmpItem.GTXFileRepoStatus = GetFileStatus(repoPath, fileInfo.FullName);
+                    tmpItem.insert();
+                }
+            }
+
+            return tmpItem;
+        }
+
+        /// <summary>
+        /// Brings all commits related to the file. Currently being called from AX.
         /// </summary>
         /// <param name="repoPath">Repository main path</param>
         /// <param name="filePath">File to be pulling the commits</param>
@@ -59,37 +96,70 @@ namespace GTXLibGit2Sharp
         public static SysVersionControlTmpItem FileHistory(string repoPath, string filePath)
         {
             SysVersionControlTmpItem tmpItem = new SysVersionControlTmpItem();
+
             try
             {
-                FileInfo fileInfo = new FileInfo(filePath);
+                BuildFileHistory(repoPath, filePath, ref tmpItem);
+            }
+            catch (Exception ex)
+            {
+                throw ex;
+            }
 
-                using (var repo = new Repository(repoPath))
+            return tmpItem;
+        }
+
+        /// <summary>
+        /// Brings all commits related to the file
+        /// </summary>
+        /// <param name="repoPath">Repository main path</param>
+        /// <param name="filePath">File to be pulling the commits</param>
+        /// <param name="tmpItem">Ref to the SysVersionControlTmpItem object to be inserting to</param>
+        /// <returns>A SysVersionControlTmpItem filled with the commits</returns>
+        public static SysVersionControlTmpItem FileHistory(string repoPath, string filePath, ref SysVersionControlTmpItem tmpItem)
+        {
+            if (tmpItem == null)
+                tmpItem = new SysVersionControlTmpItem();
+
+            try
+            {
+                BuildFileHistory(repoPath, filePath, ref tmpItem);
+            }
+            catch (Exception ex)
+            {
+                throw ex;
+            }
+
+            return tmpItem;
+        }
+
+        /// <summary>
+        /// Brings all commits related to a directory
+        /// </summary>
+        /// <param name="repoPath">Repository main path</param>
+        /// <param name="dirPath">Directory to be pulling the commits</param>
+        /// <returns>A SysVersionControlTmpItem filled with the commits of files in a directory</returns>
+        public static SysVersionControlTmpItem DirectoryHistory(string repoPath, string dirPath)
+        {
+            SysVersionControlTmpItem tmpItem = new SysVersionControlTmpItem();
+
+            try
+            {
+                DirectoryInfo dirInfo = new DirectoryInfo(dirPath);
+
+                if (!dirInfo.Exists)
+                    return tmpItem;
+
+                foreach (var file in dirInfo.GetFiles())
                 {
-                    var indexPath = fileInfo.FullName.Replace(repo.Info.WorkingDirectory, string.Empty);
-                    var commits = repo.Head.Commits.Where(c => c.Parents.Count() == 1 && c.Tree[indexPath] != null && (c.Parents.FirstOrDefault().Tree[indexPath] == null || c.Tree[indexPath].Target.Id != c.Parents.FirstOrDefault().Tree[indexPath].Target.Id));
-
-                    foreach (Commit commit in commits)
-                    {
-                        tmpItem.User = commit.Author.ToString();
-                        tmpItem.GTXShaShort = commit.Sha.Substring(0, 7);
-                        tmpItem.GTXSha = commit.Sha;
-                        tmpItem.Comment = commit.Message;
-                        tmpItem.ShortComment = commit.MessageShort;
-                        tmpItem.VCSDate = commit.Committer.When.Date;
-                        tmpItem.VCSTime = (int)commit.Committer.When.DateTime.TimeOfDay.TotalSeconds;
-                        tmpItem.Filename_ = FileGetVersion(repoPath, fileInfo.FullName, commit.Sha, Path.Combine(Path.GetTempPath(), commit.Sha + fileInfo.Extension));
-                        tmpItem.InternalFilename = fileInfo.FullName;
-                        tmpItem.ItemPath = indexPath;
-                        tmpItem.GTXFileRepoStatus = GetFileStatus(repoPath, fileInfo.FullName);
-                        tmpItem.insert();
-                    }
+                    FileHistory(repoPath, file.FullName, ref tmpItem);
                 }
             }
             catch (IOException ex)
             {
                 throw ex;
             }
-            
+
             return tmpItem;
         }
 
@@ -102,7 +172,7 @@ namespace GTXLibGit2Sharp
         public static string FileGetVersion(string repoPath, string fileName, SysVersionControlTmpItem tmpItem)
         {
             string indexPath = tmpItem.InternalFilename.Replace(repoPath, string.Empty);
-            
+
             CheckoutOptions options = new CheckoutOptions();
             options.CheckoutModifiers = CheckoutModifiers.Force;
 
@@ -113,14 +183,14 @@ namespace GTXLibGit2Sharp
                 {
                     try
                     {
-                        repo.CheckoutPaths(commit.Id.Sha, new [] { fileName }, options);
+                        repo.CheckoutPaths(commit.Id.Sha, new[] { fileName }, options);
                     }
                     catch (MergeConflictException ex)
                     {
                         //should not reach here as we're forcing checkout
                         throw ex;
                     }
-                    
+
                 }
             }
 
@@ -141,7 +211,7 @@ namespace GTXLibGit2Sharp
                 string indexPath = fileName.Replace(repo.Info.WorkingDirectory, string.Empty);
 
                 var commit = repo.Lookup<Commit>(sha);
-                
+
                 Blob blob = null;
 
                 if (commit != null)
@@ -166,7 +236,6 @@ namespace GTXLibGit2Sharp
         /// <returns>True if reset was successful false if not</returns>
         public static bool FileUndoCheckout(string repoPath, string fileName, bool forceCheckout)
         {
-            //TODO: Dangerous, consider refactoring
             FileInfo fileInfo = new FileInfo(fileName);
 
             using (Repository repo = new Repository(repoPath))
@@ -234,7 +303,7 @@ namespace GTXLibGit2Sharp
                         ? CheckoutModifiers.Force
                         : CheckoutModifiers.None
             };
-            
+
             string tipSha;
 
             using (Repository repo = new Repository(repoPath))
@@ -262,7 +331,7 @@ namespace GTXLibGit2Sharp
             using (Repository repo = new Repository(repoPath))
             {
                 string indexPath = fileName.Replace(repo.Info.WorkingDirectory, string.Empty);
-                fileStatus = (int)repo.Index.RetrieveStatus(indexPath);
+                fileStatus = (int)repo.RetrieveStatus(indexPath);
             }
 
             return GetGTXFileStatus(fileStatus);
@@ -290,7 +359,7 @@ namespace GTXLibGit2Sharp
             {
                 return false;
             }
-            
+
         }
 
         /// <summary>
@@ -342,12 +411,12 @@ namespace GTXLibGit2Sharp
 
             using (Repository repo = new Repository(repoPath))
             {
-                if (!repo.Index.RetrieveStatus().IsDirty)
+                if (!repo.RetrieveStatus().IsDirty)
                     return tmpItem;
 
-                var allDirtFiles = repo.Index.RetrieveStatus(new StatusOptions { Show = StatusShowOption.IndexAndWorkDir }).
+                var allDirtFiles = repo.RetrieveStatus(new StatusOptions { Show = StatusShowOption.IndexAndWorkDir }).
                                         Where(t => t.State != FileStatus.Unaltered && t.State != FileStatus.Ignored);
-                
+
                 foreach (var dirtFile in allDirtFiles)
                 {
                     FileInfo fileInfo = new FileInfo(Path.Combine(repoPath, dirtFile.FilePath));
@@ -359,7 +428,7 @@ namespace GTXLibGit2Sharp
                     {
                         tmpItem.GTXShaShort = indexEntry.Id.Sha.Substring(0, 7);
                         tmpItem.GTXSha = indexEntry.Id.Sha;
-                        tmpItem.Filename_ = FileGetVersion(repoPath, fileInfo.FullName, indexEntry.Id.Sha, Path.Combine(Path.GetTempPath(), indexEntry.Id.Sha + fileInfo.Extension));
+                        tmpItem.Filename_ = FileGetVersion(repoPath, fileInfo.FullName, indexEntry.Id.Sha, Path.Combine(Path.GetTempPath(), string.Format("{0}_{1}{2}", fileInfo.Name, indexEntry.Id.Sha.Substring(0, 7), fileInfo.Extension)));
                         tmpItem.InternalFilename = fileInfo.FullName;
                         tmpItem.ItemPath = indexEntry.Path;
                         tmpItem.GTXFileRepoStatus = GetFileStatus(repoPath, fileInfo.FullName);
@@ -377,7 +446,7 @@ namespace GTXLibGit2Sharp
                     }
                     tmpItem.insert();
                 }
-                
+
             }
 
             return tmpItem;
@@ -430,6 +499,60 @@ namespace GTXLibGit2Sharp
                 return repo.Info.WorkingDirectory.Equals(relativePath);
             }
 
+        }
+
+        /// <summary>
+        /// Gets user name
+        /// </summary>
+        /// <param name="repoPath">The main repo path</param>
+        /// <param name="global">If retreiving global git configuration</param>
+        /// <returns>global or local user.name</returns>
+        public static string GetUserName(string repoPath, bool global = false)
+        {
+            using (Repository repo = new Repository(repoPath))
+            {
+                return repo.Config.Get<string>("user.name", global ? ConfigurationLevel.Global : ConfigurationLevel.Local).Value;
+            }
+        }
+
+        /// <summary>
+        /// Gets user email
+        /// </summary>
+        /// <param name="repoPath">The main repo path</param>
+        /// <param name="global">If retreiving global git configuration</param>
+        /// <returns>global or local user.email</returns>
+        public static string GetUserEmail(string repoPath, bool global = false)
+        {
+            using (Repository repo = new Repository(repoPath))
+            {
+                return repo.Config.Get<string>("user.email", global ? ConfigurationLevel.Global : ConfigurationLevel.Local).Value;
+            }
+        }
+
+        /// <summary>
+        /// Sets user email
+        /// </summary>
+        /// <param name="repoPath">The main repo path</param>
+        /// <param name="global">If setting global git configuration</param>
+        public static void SetUserEmail(string repoPath, string userEmail, bool global = false)
+        {
+            using (Repository repo = new Repository(repoPath))
+            {
+                repo.Config.Set("user.email", userEmail, global ? ConfigurationLevel.Global : ConfigurationLevel.Local);
+            }
+        }
+
+        /// <summary>
+        /// Sets user name
+        /// </summary>
+        /// <param name="repoPath">The main repo path</param>
+        /// <param name="global">If setting global git configuration</param>
+        public static void SetUserName(string repoPath, string userEmail, bool global = false)
+        {
+            using (Repository repo = new Repository(repoPath))
+            {
+                repo.Config.Set("user.name", userEmail, global ? ConfigurationLevel.Global : ConfigurationLevel.Local);
+            }
         }
 
     }
